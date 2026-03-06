@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Storage (uploaded images, generated results)
+backend/storage/
+backend/*.log
+backend/preload.log
+
+# AI model cache (huge files)
+*.pt
+*.safetensors
+*.bin
+*.ckpt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+frontend/dist/
+*.egg-info/
+
+# Env files
+.env
+.env.local
+
+# Temp
+/tmp/
+*.tmp
