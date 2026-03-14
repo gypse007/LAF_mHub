@@ -65,6 +65,19 @@ export default function ResultStep({
         a.click();
     }, [generatedImageUrl]);
 
+    const handleWhatsApp = useCallback(() => {
+        // Construct the message
+        const text = `Hi Lakshmi Arts! 🎨\n\nI'd like to get this mural installed.\nWhen can I schedule a site visit?\n\n(Please attach the downloaded preview image to this chat!)`;
+        const encodedText = encodeURIComponent(text);
+
+        // Use the phone number provided by the user
+        const waUrl = `https://wa.me/918019818999?text=${encodedText}`;
+        window.open(waUrl, '_blank');
+
+        // Also trigger download so they have the image to attach
+        handleDownload();
+    }, [handleDownload]);
+
     return (
         <div className="step-container">
             <div className="step-header">
@@ -112,7 +125,14 @@ export default function ResultStep({
 
             {/* Actions */}
             <div className="result-actions">
-                <button className="btn btn-success" onClick={handleDownload}>
+                <button
+                    className="btn"
+                    style={{ background: '#25D366', color: 'white', fontWeight: 'bold' }}
+                    onClick={handleWhatsApp}
+                >
+                    💬 Get This Installed (WhatsApp)
+                </button>
+                <button className="btn btn-secondary" onClick={handleDownload}>
                     ⬇️ Download Preview
                 </button>
                 <button className="btn btn-primary" onClick={onStartOver}>

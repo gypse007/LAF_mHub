@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from routes.upload import router as upload_router
 from routes.generate import router as generate_router
 from routes.styles import router as styles_router
+from routes.chat import router as chat_router
 
 app = FastAPI(
     title="Wall Mural AI",
@@ -38,7 +39,7 @@ app.mount("/api/static/results", StaticFiles(directory=os.path.join(storage_dir,
 app.include_router(upload_router)
 app.include_router(generate_router)
 app.include_router(styles_router)
-
+app.include_router(chat_router)
 
 @app.get("/")
 async def root():

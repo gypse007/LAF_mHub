@@ -4,12 +4,12 @@ import Stepper from './components/Stepper';
 import UploadStep from './components/UploadStep';
 import TagStep from './components/TagStep';
 import PrintAreaStep from './components/PrintAreaStep';
-import StyleStep from './components/StyleStep';
+import OpenClawChat from './components/OpenClawChat';
 import GenerateStep from './components/GenerateStep';
 import ResultStep from './components/ResultStep';
 import { uploadWall, getImageUrl, updateWallTags, updatePrintArea, generateDesign, checkGenerationStatus } from './api';
 
-const STEPS = ['Upload', 'Tag', 'Print Area', 'Style', 'Generate', 'Result'];
+const STEPS = ['Upload', 'Tag', 'Print Area', 'OpenClaw AI', 'Generate', 'Result'];
 
 interface WallState {
   wallId: string | null;
@@ -102,10 +102,7 @@ export default function App() {
     setCurrentStep(3);
   }, [wall.wallId, wall.printArea, completeStep]);
 
-  // Step 4: Style
-  const handleStyleSelect = useCallback((styleId: string) => {
-    setWall((prev) => ({ ...prev, selectedStyle: styleId }));
-  }, []);
+  // Step 4: OpenClaw AI handles its own state and returns a finalized string
 
   // Step 5: Generate
   const handleGenerate = useCallback(async (styleOverride?: string) => {
@@ -235,6 +232,7 @@ export default function App() {
               onPrintAreaChange={handlePrintAreaChange}
               wallSize={wall.wallSize}
               onWallSizeChange={(size) => setWall((prev) => ({ ...prev, wallSize: size }))}
+              onSkip={handlePrintAreaNext}
             />
             <div className="btn-group">
               <button className="btn btn-secondary" onClick={() => setCurrentStep(1)}>
@@ -247,28 +245,22 @@ export default function App() {
           </div>
         )}
 
-        {/* Step 4: Style */}
+        {/* Step 4: OpenClaw Chat */}
         {currentStep === 3 && (
-          <>
-            <StyleStep
-              wallId={wall.wallId!}
-              selectedStyle={wall.selectedStyle}
-              onStyleSelect={handleStyleSelect}
+          <div className="card fade-in">
+            <OpenClawChat
               wallTags={wall.tags}
+              onComplete={(finalPrompt: string) => {
+                setWall(prev => ({ ...prev, selectedStyle: finalPrompt }));
+                handleGenerate(finalPrompt);
+              }}
             />
-            <div className="btn-group">
+            <div className="btn-group" style={{ marginTop: 16 }}>
               <button className="btn btn-secondary" onClick={() => setCurrentStep(2)}>
                 ← Back
               </button>
-              <button
-                className="btn btn-success"
-                disabled={!wall.selectedStyle}
-                onClick={() => handleGenerate()}
-              >
-                🚀 Generate Mural
-              </button>
             </div>
-          </>
+          </div>
         )}
 
         {/* Step 5: Generating */}

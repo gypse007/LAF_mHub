@@ -7,13 +7,20 @@ interface UploadStepProps {
 
 export default function UploadStep({ onUpload, preview }: UploadStepProps) {
     const [isDragOver, setIsDragOver] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const cameraRef = useRef<HTMLInputElement>(null);
 
-    const handleFile = useCallback((file: File) => {
+    const processFile = useCallback((file: File) => {
+        setIsUploading(true);
         const reader = new FileReader();
-        reader.onload = (e) => {
-            onUpload(file, e.target?.result as string);
+        reader.onload = async (e) => {
+            try {
+                // In App.tsx handleUpload is async, so we await it
+                await onUpload(file, e.target?.result as string);
+            } finally {
+                setIsUploading(false);
+            }
         };
         reader.readAsDataURL(file);
     }, [onUpload]);
@@ -23,14 +30,14 @@ export default function UploadStep({ onUpload, preview }: UploadStepProps) {
         setIsDragOver(false);
         const file = e.dataTransfer.files[0];
         if (file && file.type.startsWith('image/')) {
-            handleFile(file);
+            processFile(file);
         }
-    }, [handleFile]);
+    }, [processFile]);
 
     const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) handleFile(file);
-    }, [handleFile]);
+        if (file) processFile(file);
+    }, [processFile]);
 
     return (
         <div className="step-container">
@@ -54,9 +61,15 @@ export default function UploadStep({ onUpload, preview }: UploadStepProps) {
                 onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                 onDragLeave={() => setIsDragOver(false)}
                 onDrop={handleDrop}
-                onClick={() => inputRef.current?.click()}
+                onClick={(!isUploading) ? () => inputRef.current?.click() : undefined}
+                style={{ cursor: isUploading ? 'not-allowed' : 'pointer' }}
             >
-                {preview ? (
+                {isUploading ? (
+                    <div className="upload-loading" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+                        <div className="generate-spinner" style={{ width: 40, height: 40, border: '3px solid var(--border)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                        <div style={{ fontWeight: 600 }}>Analyzing Wall...</div>
+                    </div>
+                ) : preview ? (
                     <>
                         <img src={preview} alt="Wall preview" className="upload-preview" />
                         <div className="upload-overlay">

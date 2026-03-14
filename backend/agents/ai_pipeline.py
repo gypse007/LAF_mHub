@@ -51,8 +51,14 @@ class AdvancedMuralPipeline:
         
         # Optimization for Mac MPS or CUDA
         if self.device == "mps":
+            import os
+            os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
             self.pipe.to(self.device)
-            # Mac specific attention slicing: self.pipe.enable_attention_slicing()
+            # Dramatically reduces memory usage on Mac to prevent Metal crashes
+            self.pipe.enable_attention_slicing()
+            # Also slice the VAE to prevent OOM when decoding the high-res image
+            self.pipe.enable_vae_slicing()
+            logger.info("Enabled MPS attention and VAE slicing to prevent OOM crashes.")
         elif self.device == "cuda":
             self.pipe.enable_model_cpu_offload()
 
@@ -76,39 +82,205 @@ class AdvancedMuralPipeline:
         cv2.fillPoly(mask, [pts], 255)
         return mask
 
+    def _enhance_prompt_for_mural(self, raw_prompt: str) -> str:
+        """Auto-translates a user's free-form prompt into a high-quality mural prompt."""
+        # Strip common filler words and enhance with mural-specific language
+        enhanced = raw_prompt.strip().rstrip('.')
+        
+        # Add mural-optimized suffixes if not already present
+        quality_tags = []
+        lower = enhanced.lower()
+        if 'mural' not in lower:
+            quality_tags.append('wall mural art')
+        if '8k' not in lower and '4k' not in lower and 'high res' not in lower:
+            quality_tags.append('8k ultra high resolution')
+        if 'realistic' not in lower and 'photorealistic' not in lower:
+            quality_tags.append('photorealistic')
+        if 'detail' not in lower:
+            quality_tags.append('intricate details')
+        
+        quality_tags.extend([
+            'masterpiece quality',
+            'professional art',
+            'vivid colors',
+            'beautiful composition'
+        ])
+        
+        return f"{enhanced}, {', '.join(quality_tags)}"
+
     def generate_mural(self, wall_image: Image.Image, prompt: str, corners: List[List[int]], reference_image_path: str = None) -> Image.Image:
-        """Generates the base mural using ControlNet Depth-Guided SDXL."""
-        if self.use_mock:
-            logger.info("Mock generating mural image...")
-            if reference_image_path:
-                logger.info(f"[Mock] Applying style vector from {reference_image_path} via CLIP")
-            return Image.new("RGB", wall_image.size, color=(70, 70, 150))
+        """Generates the base mural using RunPod Nano Banana or falls back to mock."""
+        import os
+        import requests
+        import base64
+        import io
+        import time
+        
+        runpod_api_key = os.getenv("RUNPOD_API_KEY")
+        runpod_endpoint = os.getenv("RUNPOD_ENDPOINT_ID")
+        
+        # Enhance the prompt for mural quality
+        enhanced_prompt = self._enhance_prompt_for_mural(prompt)
+        logger.info(f"Enhanced prompt: {enhanced_prompt}")
+
+        # ─── REAL GENERATION via RunPod Nano Banana ───
+        # RunPod credentials OVERRIDE use_mock — if you have keys, use real generation
+        if runpod_api_key and runpod_endpoint:
+            logger.info(f"Routing generation to RunPod Nano Banana: {runpod_endpoint}")
             
-        self.load_models()
+            headers = {
+                "Authorization": f"Bearer {runpod_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Determine output size based on wall image
+            w, h = wall_image.size
+            # Cap at 1024 for fast generation, maintain aspect ratio
+            scale = min(1024 / max(w, h), 1.0)
+            out_w = int(w * scale)
+            out_h = int(h * scale)
+            # Round to nearest 8 (required by most diffusion models)
+            out_w = (out_w // 8) * 8
+            out_h = (out_h // 8) * 8
+            
+            # Nano Banana is an IMAGE EDITING model — it needs a source image
+            # Resize and encode the wall image as base64
+            resized_wall = wall_image.resize((out_w, out_h), Image.Resampling.LANCZOS)
+            wall_buf = io.BytesIO()
+            resized_wall.save(wall_buf, format="PNG")
+            wall_b64 = base64.b64encode(wall_buf.getvalue()).decode("utf-8")
+            
+            payload = {
+                "input": {
+                    "prompt": enhanced_prompt,
+                    "images": [wall_b64],
+                    "resolution": "1k",
+                    "output_format": "png",
+                    "enable_safety_checker": True,
+                    "width": out_w,
+                    "height": out_h
+                }
+            }
+            
+            try:
+                # Submit async job
+                run_url = f"https://api.runpod.ai/v2/{runpod_endpoint}/run"
+                logger.info(f"Submitting job to {run_url}")
+                resp = requests.post(run_url, json=payload, headers=headers, timeout=30)
+                resp.raise_for_status()
+                job_data = resp.json()
+                job_id = job_data.get("id")
+                
+                if not job_id:
+                    raise Exception(f"No job ID returned: {job_data}")
+                
+                logger.info(f"RunPod job submitted: {job_id}, polling for results...")
+                
+                # Poll for completion (max 120 seconds)
+                status_url = f"https://api.runpod.ai/v2/{runpod_endpoint}/status/{job_id}"
+                for attempt in range(60):  # 60 * 2s = 120s max
+                    time.sleep(2)
+                    status_resp = requests.get(status_url, headers=headers, timeout=15)
+                    status_resp.raise_for_status()
+                    status_data = status_resp.json()
+                    status = status_data.get("status")
+                    
+                    logger.info(f"  Poll {attempt+1}: {status}")
+                    
+                    if status == "COMPLETED":
+                        output = status_data.get("output")
+                        logger.info(f"  RunPod raw output: {output}")
+                        
+                        # Handle different output formats
+                        image_data = None
+                        if isinstance(output, list) and len(output) > 0:
+                            # Format: [{"image": "url_or_b64", ...}]
+                            item = output[0]
+                            image_data = item.get("image") or item.get("image_url") or item.get("result")
+                        elif isinstance(output, dict):
+                            # Format: {"image": "url_or_b64"} or {"result_b64": "..."}
+                            image_data = output.get("image") or output.get("image_url") or output.get("result_b64") or output.get("result") or output.get("images")
+                            # If images is a list, take first
+                            if isinstance(image_data, list) and len(image_data) > 0:
+                                image_data = image_data[0]
+                                if isinstance(image_data, dict):
+                                    image_data = image_data.get("image") or image_data.get("url") or image_data.get("image_url")
+                        elif isinstance(output, str):
+                            image_data = output
+                        
+                        if not image_data:
+                            raise Exception(f"Could not extract image from RunPod output: {output}")
+                        
+                        # Check if it's a URL or base64
+                        if image_data.startswith("http"):
+                            logger.info(f"Downloading result image from URL...")
+                            img_resp = requests.get(image_data, timeout=30)
+                            img_resp.raise_for_status()
+                            return Image.open(io.BytesIO(img_resp.content)).convert("RGB")
+                        else:
+                            # Base64 encoded
+                            # Strip data URI prefix if present
+                            if "," in image_data:
+                                image_data = image_data.split(",", 1)[1]
+                            img_bytes = base64.b64decode(image_data)
+                            return Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    
+                    elif status == "FAILED":
+                        error = status_data.get("error", "Unknown error")
+                        raise Exception(f"RunPod job failed: {error}")
+                    
+                    elif status in ("IN_QUEUE", "IN_PROGRESS"):
+                        continue
+                    else:
+                        logger.warning(f"Unknown status: {status}")
+                
+                raise Exception("RunPod job timed out after 120 seconds")
+                
+            except Exception as e:
+                logger.error(f"RunPod Nano Banana error: {e}")
+                logger.info("Falling back to mock generation...")
+                # Fall through to mock below
+
+        # ─── MOCK FALLBACK (only if no RunPod credentials) ───
+        logger.info(f"Mock generating mural image for prompt: {enhanced_prompt}")
         
-        # 1. Get the depth map constraint
-        depth_map = self.get_depth_map(wall_image)
+        w, h = wall_image.size
+        mock = np.zeros((h, w, 3), dtype=np.uint8)
         
-        # 2. Extract style embedding if a reference image is provided
-        # (In reality, we would use CLIPVisionModelWithProjection to encode style)
-        prompt_suffix = ""
-        if reference_image_path:
-            logger.info(f"Extracting CLIP style rendering from {reference_image_path}...")
-            prompt_suffix = " in the exact style, color palette, and mood of the reference image"
+        import hashlib
+        seed = int(hashlib.md5(prompt.encode()).hexdigest()[:8], 16)
+        rng = np.random.RandomState(seed)
         
-        # 3. Enhance prompt with high-end interior semantics
-        full_prompt = f"{prompt}{prompt_suffix}, perfectly aligned to wall perspective, high resolution interior mural, photorealistic room lighting, 8k architectural"
+        c1 = rng.randint(60, 200, 3)
+        c2 = rng.randint(60, 200, 3)
+        c3 = rng.randint(60, 200, 3)
+        c4 = rng.randint(60, 200, 3)
         
-        logger.info(f"Running ControlNet Diffusion with prompt: {full_prompt}")
-        result = self.pipe(
-            prompt=full_prompt,
-            negative_prompt="flat, poor quality, bad lighting, cartoon, distorted room, mismatched perspective",
-            image=depth_map, # SDXL ControlNet expects the depth image here
-            controlnet_conditioning_scale=0.9, # Stronger adherence with fewer steps
-            num_inference_steps=15  # 15 steps ≈ 3.5 min on MPS (was 30 ≈ 7.5 min)
-        ).images[0]
+        for y in range(h):
+            fy = y / max(h - 1, 1)
+            top = c1 * (1 - fy) + c3 * fy
+            bot = c2 * (1 - fy) + c4 * fy
+            for x_step in range(0, w, max(1, w // 200)):
+                fx = x_step / max(w - 1, 1)
+                color = top * (1 - fx) + bot * fx
+                end = min(x_step + max(1, w // 200), w)
+                mock[y, x_step:end] = color.astype(np.uint8)
         
-        return result
+        noise = rng.normal(0, 15, mock.shape).astype(np.float32)
+        mock = np.clip(mock.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        
+        mock_cv = mock.copy()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text = prompt[:60] + ("..." if len(prompt) > 60 else "")
+        text_size = cv2.getTextSize(text, font, 0.7, 2)[0]
+        tx = (w - text_size[0]) // 2
+        ty = (h + text_size[1]) // 2
+        cv2.putText(mock_cv, text, (tx + 2, ty + 2), font, 0.7, (0, 0, 0), 2)
+        cv2.putText(mock_cv, text, (tx, ty), font, 0.7, (255, 255, 255), 2)
+        badge = "MOCK PREVIEW — Set RUNPOD_API_KEY for real generation"
+        cv2.putText(mock_cv, badge, (10, h - 20), font, 0.5, (200, 200, 200), 1)
+        
+        return Image.fromarray(cv2.cvtColor(mock_cv, cv2.COLOR_BGR2RGB))
 
     def apply_perspective_warp(self, wall_img_cv: np.ndarray, mural_img_cv: np.ndarray, corners: List[List[int]]):
         """Warps the 2D generated mural onto the exact wall 3D plane using Homography."""

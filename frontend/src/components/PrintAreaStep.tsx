@@ -8,9 +8,10 @@ interface PrintAreaStepProps {
     onPrintAreaChange: (area: number[][]) => void;
     wallSize: { width: number; height: number } | null;
     onWallSizeChange: (size: { width: number; height: number } | null) => void;
+    onSkip: () => void;
 }
 
-export default function PrintAreaStep({ wallId, imagePreview, printArea, onPrintAreaChange, wallSize, onWallSizeChange }: PrintAreaStepProps) {
+export default function PrintAreaStep({ wallId, imagePreview, printArea, onPrintAreaChange, wallSize, onWallSizeChange, onSkip }: PrintAreaStepProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [startNatural, setStartNatural] = useState<{ x: number; y: number } | null>(null);
@@ -126,14 +127,18 @@ export default function PrintAreaStep({ wallId, imagePreview, printArea, onPrint
 
     return (
         <div className="step-container">
-            <div className="step-header">
-                <h2 className="step-title">Select Your Wall</h2>
-                <p className="step-subtitle">
-                    {isDetecting && '🔍 AI is detecting walls...'}
-                    {!isDetecting && printArea.length === 0 && detectedPolygons.length > 0 && 'Tap a highlighted wall, or draw your own area'}
-                    {!isDetecting && printArea.length === 0 && detectedPolygons.length === 0 && 'Draw a rectangle on the area you want the mural'}
-                    {printArea.length > 0 && '✅ Wall selected! You can redraw or continue.'}
-                </p>
+            <div className="step-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                    <h2 className="step-title">Define Print Area</h2>
+                    <p className="step-subtitle">Draw a box where the mural goes, or click a detected wall.</p>
+                </div>
+                <button
+                    className="btn"
+                    onClick={onSkip}
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: '0.85rem' }}
+                >
+                    Skip &rarr;
+                </button>
             </div>
 
             {/* Instruction banner */}

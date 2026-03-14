@@ -98,7 +98,18 @@ export async function getStyleSuggestions(tags: string[]) {
         body: JSON.stringify({ tags }),
     });
 
-    if (!res.ok) throw new Error('Failed to fetch suggestions');
+    if (!res.ok) throw new Error('Failed to get style suggestions');
+    return res.json();
+}
+
+export async function chatWithOpenclaw(history: any[], wallTags: Record<string, string>) {
+    const res = await fetch(`${API_BASE}/api/chat/openclaw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history, wallTags }),
+    });
+
+    if (!res.ok) throw new Error('Chat API failed');
     return res.json();
 }
 

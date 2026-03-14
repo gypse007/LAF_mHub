@@ -17,11 +17,15 @@ export default function GenerateStep({ isLoading, error }: GenerateStepProps) {
     const [statusIndex, setStatusIndex] = useState(0);
 
     useEffect(() => {
-        if (!isLoading) return;
-        setStatusIndex(0);
+        if (!isLoading) {
+            setTimeout(() => setStatusIndex(0), 10);
+            return;
+        }
+
         const interval = setInterval(() => {
             setStatusIndex((prev) => (prev < STATUSES.length - 1 ? prev + 1 : prev));
         }, 1500);
+
         return () => clearInterval(interval);
     }, [isLoading]);
 

@@ -1,23 +1,50 @@
 """
 Upload route — handles wall image uploads and analysis.
+Uses JSON-file persistence so uploads survive server restarts.
 """
 
 import os
 import uuid
+import json
+import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from agents.wall_agent import WallVisionAgent
 from agents.wall_detector import AutoWallDetector
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/wall", tags=["wall"])
 
 STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage", "images")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
+WALL_STORE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage", "wall_store.json")
+
 wall_agent = WallVisionAgent()
 wall_detector = AutoWallDetector(use_mock=os.getenv("USE_MOCK_PIPELINE", "True").lower() == "true")
 
-# In-memory store for wall data (MVP; use a DB in production)
-wall_store: dict = {}
+
+# ─── Persistent wall_store backed by JSON file ───────────────────────
+def _load_store() -> dict:
+    """Load the wall store from disk."""
+    if os.path.exists(WALL_STORE_PATH):
+        try:
+            with open(WALL_STORE_PATH, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_store():
+    """Persist the wall store to disk."""
+    try:
+        with open(WALL_STORE_PATH, "w") as f:
+            json.dump(wall_store, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save wall store: {e}")
+
+# Load on startup
+wall_store: dict = _load_store()
+logger.info(f"Loaded {len(wall_store)} walls from persistent store.")
 
 
 @router.post("/upload")
@@ -49,6 +76,7 @@ async def upload_wall(file: UploadFile = File(...)):
         "tags": {},
         "print_area": None,
     }
+    _save_store()
 
     return {
         "wall_id": wall_id,
@@ -64,6 +92,7 @@ async def update_wall_tags(wall_id: str, tags: dict):
         raise HTTPException(status_code=404, detail="Wall not found")
 
     wall_store[wall_id]["tags"] = tags
+    _save_store()
     return {"wall_id": wall_id, "tags": tags}
 
 
@@ -86,6 +115,7 @@ async def upload_reference_image(wall_id: str, file: UploadFile = File(...)):
         f.write(content)
 
     wall_store[wall_id]["reference_image_path"] = filepath
+    _save_store()
     return {"wall_id": wall_id, "reference_image_path": filepath}
 
 
@@ -96,6 +126,7 @@ async def update_print_area(wall_id: str, data: dict):
         raise HTTPException(status_code=404, detail="Wall not found")
 
     wall_store[wall_id]["print_area"] = data.get("print_area", [])
+    _save_store()
     return {"wall_id": wall_id, "print_area": wall_store[wall_id]["print_area"]}
 
 
@@ -110,6 +141,7 @@ async def detect_walls(wall_id: str):
     polygons = wall_detector.detect_walls(image_path)
     
     wall_store[wall_id]["detected_walls"] = polygons
+    _save_store()
     return {"wall_id": wall_id, "detected_walls": polygons}
 
 

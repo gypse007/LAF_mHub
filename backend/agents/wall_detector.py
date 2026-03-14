@@ -63,32 +63,35 @@ class AutoWallDetector:
                 
                 for cnt in contours:
                     area = cv2.contourArea(cnt)
-                    # Filter out small objects (less than 5% of the total image area)
-                    if area > (img_area * 0.05) and area < (img_area * 0.95):
-                        # Approximate polygon geometry
-                        epsilon = 0.02 * cv2.arcLength(cnt, True)
+                    # Relaxed lower bounds to catch smaller accent walls (2% instead of 5%)
+                    if area > (img_area * 0.02) and area < (img_area * 0.95):
+                        # Approximate polygon geometry (higher epsilon for smoother edges)
+                        epsilon = 0.03 * cv2.arcLength(cnt, True)
                         approx = cv2.approxPolyDP(cnt, epsilon, True)
                         
-                        # Only keep shapes with at least 4 vertices
-                        if len(approx) >= 4:
+                        # Keep shapes with 4 to 8 vertices (allows L-shaped or partially blocked walls)
+                        if 4 <= len(approx) <= 8:
                             poly = [[int(pt[0][0]), int(pt[0][1])] for pt in approx]
-                            polygons.append(poly)
-                        else:
-                            logger.info(f"Discarded shape with {len(approx)} vertices.")
-                    elif area >= (img_area * 0.95):
-                        logger.info("Discarded shape. Too large (>95% area).")
+                            polygons.append({
+                                'points': poly,
+                                'area': area
+                            })
                             
-            logger.info(f"Final valid wall polygons: {len(polygons)}")
-            # Sort polygons by size (largest first) to prioritize main walls
-            polygons.sort(key=lambda p: cv2.contourArea(np.array(p)), reverse=True)
+            logger.info(f"SAM detected {len(polygons)} valid wall candidates.")
+            
+            # Sort polygons by size (largest first)
+            polygons.sort(key=lambda p: p['area'], reverse=True)
+            
+            # Extract just the point arrays for the top 6 largest segments to prevent overlap clutter
+            final_polys = [p['points'] for p in polygons[:6]]
             
             # Fallback if no polygons found
-            if len(polygons) == 0:
+            if len(final_polys) == 0:
                 logger.warning("No polygons passed filtering. Returning entire image as a fallback polygon.")
                 w, h = image.width, image.height
                 return [[[0, 0], [w, 0], [w, h], [0, h]]]
                 
-            return polygons
+            return final_polys
             
         except Exception as e:
             logger.exception("SAM wall detection failed")
